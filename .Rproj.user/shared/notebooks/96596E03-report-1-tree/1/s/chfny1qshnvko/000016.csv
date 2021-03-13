@@ -1,0 +1,4 @@
+"0","rpart.plot(simple_tree)
+"
+"2","Error in rpart.plot(simple_tree) : Not an rpart object
+"
