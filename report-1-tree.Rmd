@@ -12,6 +12,10 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ```{r, echo = FALSE, message=FALSE, warning=FALSE}
+# install.packages("data.tree")
+# install.packages("DiagrammeR")
+install.packages("gbm")
+install.packages("xgboost")
 library(tidyverse)
 library(ggplot2)
 library(caret)
@@ -24,24 +28,29 @@ library(glmnet)
 library(rattle)
 library(Hmisc)
 library(modelsummary)
+library(data.table)
+library(data.tree)
+library(DiagrammeR)
+library(gbm)
+library(xgboost)
 
 library(h2o)
 library(rpart)
 library(rpart.plot)
 ```
 
-```{r, echo = FALSE, message=FALSE, warning=FALSE}
+```{r, echo = FALSE, message=FALSE, warning=FALSE,  results= FALSE}
 
 h2o.init()
 
 # stop 
-h2o.shutdown()
+# h2o.shutdown()
 
 ```
 
 
 
-## EDA
+### EDA
 
 
 ```{r data, echo=FALSE}
@@ -66,7 +75,7 @@ A factor with levels No and Yes indicating whether the sale is at Store 7
 
 ```{r, echo = FALSE, message=FALSE, warning=FALSE}
 
-?ISLR::OJ
+# ?ISLR::OJ
 ```
 
 
@@ -98,15 +107,14 @@ plot(data$Purchase,data$PriceCH)
 ```
 
 
+### *a. Create a training data of 75% and keep 25% of the data as a test set. Train a decision tree as a benchmark model. Plot the final model and interpret the result (using rpart and rpart.plot is an easier option).*
 
-```{r, echo = FALSE, message=FALSE, warning=FALSE}
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE, results= FALSE}
 
 h2o_data <- as.h2o(data)
 my_seed <- 20210312
-str(h2o_data)
-```
-
-```{r, echo = FALSE, message=FALSE, warning=FALSE}
+# str(h2o_data)
 splitted_data <- h2o.splitFrame(h2o_data, ratios = c(0.75), seed = my_seed)
 data_train <- splitted_data[[1]]
 data_test <- splitted_data[[2]]
@@ -128,15 +136,26 @@ simple_tree <- h2o.randomForest(
   nfolds = 5,
   seed = my_seed
 )
+simple_tree
 
-# h2o.mae(h2o.performance(simple_tree)) 
+# NaN
+h2o.performance(simple_tree)
+
+# xval stands for 'cross-validation'
+print(h2o.performance(simple_tree, xval = TRUE))
+
+# 0.47
+h2o.rmse(h2o.performance(simple_tree, xval = TRUE)) 
+
+
 # h2o.mae(h2o.performance(simple_tree, data_valid))
 ```
 
 
 
 ```{r, echo = FALSE, message=FALSE, warning=FALSE}
-rpart.plot(simple_tree)
+# rpart.plot(simple_tree)
+# Error in rpart.plot(simple_tree) : Not an rpart object
 
 simple_tree
 ```
@@ -149,40 +168,431 @@ smp_size <- floor(0.7 * nrow(data))
 set.seed(my_seed)
 
 train_ids <- sample(seq_len(nrow(data)), size = smp_size)
-demo_data <- data
-demo_data$train <- 0
-demo_data$train[train_ids] <- 1
+data_c <- data
+data_c$train <- 0
+data_c$train[train_ids] <- 1
 # Create train and test sample variables
-demo_data_train <- demo_data %>% filter(train == 1)
-demo_data_test <- demo_data %>% filter(train == 0)
+data_train_c <- data_c %>% filter(train == 1)
+data_test_c <- data_c %>% filter(train == 0)
 
-model1 <- formula(Purchase ~ STORE)
+model1 <- formula(Purchase ~ PriceDiff)
+
+
+# method = "rpart" => Error: The tuning parameter grid should have columns cp
+
+# cart1 <- train(
+#   model1, data = demo_data_train, method = "rpart",
+#   trControl = trainControl(method="none"),
+#   tuneGrid= data.frame(maxdepth=1))
 
 cart1 <- train(
-  model1, data = demo_data_train, method = "rpart2",
-  trControl = trainControl(method="none"),
-  tuneGrid= data.frame(maxdepth=1))
+  model1, data = data_train_c, method = "rpart",
+  trControl = trainControl(method="cv"),
+  tuneGrid= expand.grid(cp = 0.01),
+  control = rpart.control(minsplit = 20, maxcompete = FALSE),
+  na.action = na.pass)
 
-rpart.plot(cart1$finalModel, tweak=1, digits=1, extra=1)
+# rpart.plot(cart1$finalModel)
+rpart.plot(cart1$finalModel, tweak=1, digits=1)
+
 ```
 
 
-
-
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
-
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+```{r}
+cart2 <- train(
+  model1, data = data_train_c, method = "rpart2",
+  trControl = trainControl(method="cv"),
+  tuneGrid= data.frame(maxdepth= c(2, 3, 4)))
+cart2
+```
 
 ```{r cars}
-summary(cars)
+# 468 CH
+# demo_data_train[demo_data_train$Purchase == 'CH',]
+# 522 obs where PriceDiff >= 0.015
+# demo_data_train[demo_data_train$PriceDiff >= 0.015,]
+# 365 customers chose 'CH' when PriceDiff >= 0.015 
+# 157 customers chose 'MM' when PriceDiff >= 0.015 
+# demo_data_train[demo_data_train$PriceDiff >= 0.015 & demo_data_train$Purchase == 'MM',]
+
+# Accuracy 0.67
+cart1$results
 ```
 
-## Including Plots
 
-You can also embed plots, for example:
 
-```{r, echo=FALSE}
-plot(pressure)
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+
+# do 5-fold CV
+train_control <- trainControl(method = "cv",
+                              number = 5,
+                              verboseIter = FALSE)
+# set tuning
+tune_grid <- expand.grid(
+  .mtry = c(3, 4, 5),
+  .splitrule = "extratrees",
+  .min.node.size = c(5, 10)
+)
+predictors_1 <- colnames(data[,-1])
+
+set.seed(my_seed)
+
+
+# rf_model_1 <- train(
+#   formula(paste0("Purchase ~", paste0(predictors_1, collapse = " + "))),
+#   data = data_train_c,
+#   method = "ranger",
+#   trControl = train_control,
+#   ntree = c(10, 500),
+#   tuneGrid = tune_grid,
+#   importance = "impurity"
+# )
+
+rf_model_1 <- train(
+  as.factor(Purchase) ~ ., 
+  data = data_train_c,
+  method = "ranger",
+  trControl = train_control,
+  tuneGrid = tune_grid,
+  importance = "impurity"
+)
+
+# Accuracy 0.80 -> This score measures how many labels the model got right out of the total number of predictions.
+rf_model_1
+
+```
+
+
+```{r}
+# set.seed(my_seed)
+# rf_model_2 <- train(
+#    Purchase ~ ., 
+#    data = data_train_c, 
+#    method = "rf",
+#    metric = "RMSE",
+#    tuneGrid = expand.grid(mtry = 1:10), # searching around mtry=4
+#    trControl = train_control
+# )
+
+```
+
+
+
+
+```{r}
+gbm_grid <-  expand.grid(interaction.depth = c(1, 5, 10), # complexity of the tree
+                         n.trees = (4:10)*50, # number of iterations, i.e. trees
+                         shrinkage = 0.1, # learning rate: how quickly the algorithm adapts
+                         n.minobsinnode = c(1, 5) # the minimum number of training set samples in a node to commence splitting
+)
+
+
+set.seed(my_seed)
+
+gbm_model <- train(as.factor(Purchase) ~ ., 
+                     data = data_train_c,
+                     method = "gbm",
+                     trControl = train_control,
+                     verbose = FALSE,
+                     tuneGrid = gbm_grid)
+
+# Accuracy 0.8211864
+gbm_model
+```
+
+
+```{r}
+
+xgb_grid <-  expand.grid(
+        nrounds=c(350),
+        max_depth = c(2,3, 4),
+        eta = c(0.03,0.05, 0.06),
+        gamma = c(0.01),
+        colsample_bytree = c(0.5),
+        subsample = c(0.75),
+        min_child_weight = c(0))
+set.seed(my_seed)
+xgb_model <- train(
+        formula(paste0("Purchase ~", paste0(predictors_1, collapse = " + "))),
+        method = "xgbTree",
+        data = data_train_c,
+        tuneGrid = xgb_grid,
+        trControl = train_control
+    )
+
+# Accuracy 0.8251598 
+xgb_model
+# as.factor(Purchase) ~ ., 
+```
+
+```{r}
+
+xgb_model$finalModel
+
+```
+
+
+
+```{r}
+
+# evaluate random forests -------------------------------------------------
+
+results <- resamples(
+  list(
+    model_1  = cart1,
+    model_2  = rf_model_1,
+    model_3 = gbm_model,
+    model_4 = xgb_model
+  )
+)
+summary(results)
+
+```
+
+
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+titanicHex = h2o_data
+response = "Purchase"
+predictors <- setdiff(names(h2o_data), response)
+
+
+titanic_1tree = 
+  h2o.gbm(x = predictors, y = response, 
+          training_frame = data_train, 
+          ntrees = 1, min_rows = 1, 
+          sample_rate = 1, col_sample_rate = 1,
+          max_depth = 3,
+          # use early stopping once the validation AUC doesn't improve 
+          # by at least 0.01% for 5 consecutive scoring events
+          stopping_rounds = 3, stopping_tolerance = 0.01, 
+          stopping_metric = "AUC", 
+          seed = 1)
+
+titanicH2oTree = h2o.getModelTree(model = titanic_1tree, tree_number = 1)
+titanicH2oTree
+```
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+
+createDataTree <- function(h2oTree) {
+  h2oTreeRoot = h2oTree@root_node
+  dataTree = Node$new(h2oTreeRoot@split_feature)
+  dataTree$type = 'split'
+  addChildren(dataTree, h2oTreeRoot)
+  return(dataTree)
+}
+
+addChildren <- function(dtree, node) {
+  
+  if(class(node)[1] != 'H2OSplitNode') return(TRUE)
+  
+  feature = node@split_feature
+  id = node@id
+  na_direction = node@na_direction
+  
+  if(is.na(node@threshold)) {
+    leftEdgeLabel = printValues(node@left_levels, 
+                                na_direction=='LEFT', 4)
+    rightEdgeLabel = printValues(node@right_levels, 
+                                 na_direction=='RIGHT', 4)
+  }else {
+    leftEdgeLabel = paste("<", node@threshold, 
+                          ifelse(na_direction=='LEFT',',NA',''))
+    rightEdgeLabel = paste(">=", node@threshold, 
+                           ifelse(na_direction=='RIGHT',',NA',''))
+  }
+  
+  left_node = node@left_child
+  right_node = node@right_child
+  
+  if(class(left_node)[[1]] == 'H2OLeafNode')
+    leftLabel = paste("prediction:", left_node@prediction)
+  else
+    leftLabel = left_node@split_feature
+  
+  if(class(right_node)[[1]] == 'H2OLeafNode')
+    rightLabel = paste("prediction:", right_node@prediction)
+  else
+    rightLabel = right_node@split_feature
+  
+  if(leftLabel == rightLabel) {
+    leftLabel = paste(leftLabel, "(L)")
+    rightLabel = paste(rightLabel, "(R)")
+  }
+  
+  dtreeLeft = dtree$AddChild(leftLabel)
+  dtreeLeft$edgeLabel = leftEdgeLabel
+  dtreeLeft$type = ifelse(class(left_node)[1] == 'H2OSplitNode', 'split', 'leaf')
+  
+  dtreeRight = dtree$AddChild(rightLabel)
+  dtreeRight$edgeLabel = rightEdgeLabel
+  dtreeRight$type = ifelse(class(right_node)[1] == 'H2OSplitNode', 'split', 'leaf')
+  
+  addChildren(dtreeLeft, left_node)
+  addChildren(dtreeRight, right_node)
+  
+  return(FALSE)
+}
+
+printValues <- function(values, is_na_direction, n=4) {
+  l = length(values)
+  if(l == 0)
+    value_string = ifelse(is_na_direction, "NA", "")
+  else
+    value_string = paste0(paste0(values[1:min(n,l)], collapse = ', '),
+                          ifelse(l > n, ",...", ""),
+                          ifelse(is_na_direction, ", NA", ""))
+  return(value_string)
+}
+```
+
+
+
+
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+
+titanicDataTree = createDataTree(titanicH2oTree)
+
+GetEdgeLabel <- function(node) {return (node$edgeLabel)}
+GetNodeShape <- function(node) {switch(node$type, 
+                                       split = "diamond", leaf = "oval")}
+GetFontName <- function(node) {switch(node$type, 
+                                      split = 'Palatino-bold', 
+                                      leaf = 'Palatino')}
+SetEdgeStyle(titanicDataTree, fontname = 'Palatino-italic', 
+             label = GetEdgeLabel, labelfloat = TRUE,
+             fontsize = "26", fontcolor='royalblue4')
+SetNodeStyle(titanicDataTree, fontname = GetFontName, shape = GetNodeShape, 
+             fontsize = "26", fontcolor='royalblue4',
+             height="0.75", width="1")
+
+SetGraphStyle(titanicDataTree, rankdir = "LR", dpi=70.)
+
+plot(titanicDataTree, output = "graph")
+```
+
+
+
+
+### *b. Investigate tree ensemble models: random forest, gradient boosting machine, XGBoost. Try various tuning parameter combinations and select the best model using cross-validation.*
+
+A good rule of thumb for the bootstrap samples (number of trees) is a few hundred. We experiment with small (10) and high (500) amount of trees. For the number of variables, one rule of thumb is to pick the square root of the total number of variables, which would be 4 (approx. square root of 18) so we tried 3, 4, and 5. 
+
+Tune the random forest
+```{r rf-tuning}
+# rf_params <- list(
+#   ntrees = c(10, 50, 100, 300),
+#   mtries = c(2, 4, 6, 8),
+#   sample_rate = c(0.2, 0.632, 1),
+#   max_depth = c(10, 20)
+# )
+
+?h2o.randomForest
+# caret - mtry. h2o - mtries
+
+# we have 6 different combinations: ntrees = 10, mtries 3, 4, 5; ntrees = 500, mtries 3, 4, 5; 
+
+rf_params <- list(ntrees = c(10, 500), mtries = c(3, 4, 5))
+
+
+rf_grid <- h2o.grid(
+  "randomForest", x = X, y = y,
+  training_frame = data_train,
+  grid_id = "rf",
+  nfolds = 5,  
+  seed = my_seed,
+  hyper_params = rf_params
+)
+
+# this shows log loss
+# rf_grid
+
+# rmse = 0.36
+# we can see that it was better to choose 3 variables to consider for each split when growing the decorrelated trees. 
+h2o.getGrid(rf_grid@grid_id, "rmse")
+
+```
+
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+
+best_rf <- h2o.getModel(
+  h2o.getGrid(rf_grid@grid_id, "rmse")@model_ids[[1]]
+)
+# 0.3608046
+h2o.rmse(h2o.performance(best_rf))
+# 0.3898565
+h2o.rmse(h2o.performance(best_rf, data_test))
+```
+
+gbm tuning
+
+```{r}
+gbm_params <- list(
+  learn_rate = c(0.01, 0.05, 0.1, 0.3),  
+  ntrees = c(10, 50, 100, 300),
+  max_depth = c(2, 5),
+  sample_rate = c(0.2, 0.5, 0.8, 1)
+)
+
+gbm_grid <- h2o.grid(
+  "gbm", x = X, y = y,
+  grid_id = "gbm",
+  training_frame = data_train,
+  nfolds = 5,
+  seed = my_seed,
+  hyper_params = gbm_params
+)
+```
+
+```{r gbm-tuning}
+gbm_performance_summary <- h2o.getGrid(gbm_grid@grid_id, "rmse")@summary_table %>%
+  as_tibble() %>%
+  mutate(across(c("rmse", names(gbm_params)), as.numeric))
+ggplot(gbm_performance_summary, aes(ntrees, rmse, color = factor(learn_rate))) +
+  geom_line() +
+  facet_grid(max_depth ~ sample_rate, labeller = label_both) +
+  theme(legend.position = "bottom") +
+  labs(color = "learning rate")
+```
+
+
+
+```{r xgboost-tuning}
+xgboost_params <- list(
+  learn_rate = c(0.1, 0.3),  # same as "eta", default: 0.3
+  ntrees = c(50, 100),
+  max_depth = c(2, 5),
+  gamma = c(0, 1, 2),  # regularization parameter
+  sample_rate = c(0.5, 1)
+)
+
+xgboost_grid <- h2o.grid(
+  "xgboost", x = X, y = y,
+  grid_id = "xgboost",
+  training_frame = data_train,
+  nfolds = 5,
+  seed = my_seed,
+  hyper_params = xgboost_params
+)
+best_xgboost <- h2o.getModel(
+  h2o.getGrid(xgboost_grid@grid_id, "mae")@model_ids[[1]]
+)
+h2o.mae(h2o.performance(best_xgboost))
+h2o.mae(h2o.performance(best_xgboost, data_valid))
+```
+
+
+
+
+*c. Compare the performance of the different models (if you use caret you should consider using the resamples function). Make sure to set the same seed before model training for all 3 models so that your cross validation samples are the same. Is any of these giving significantly different predictive power than the others?*
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE, results= FALSE}
+
+# results <- resamples(final_models) %>% summary()
 ```
 
 Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

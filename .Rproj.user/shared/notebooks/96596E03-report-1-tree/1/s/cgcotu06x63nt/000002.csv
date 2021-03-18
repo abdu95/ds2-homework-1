@@ -1,1 +1,24 @@
-"0","library(tidyverse)"
+"0","install.packages(""xgboost"")
+"
+"2","WARNING: Rtools is required to build R packages but is not currently installed. Please download and install the appropriate version of Rtools before proceeding:
+
+https://cran.rstudio.com/bin/windows/Rtools/
+"
+"2","trying URL 'https://cran.rstudio.com/bin/windows/contrib/4.0/xgboost_1.3.2.1.zip'
+"
+"2","Content type 'application/zip'"
+"2"," length 3056205 bytes (2.9 MB)
+"
+"2","downloaded 2.9 MB
+
+"
+"1","package ‘xgboost’ successfully unpacked and MD5 sums checked
+"
+"1","
+"
+"1",""
+"1","The downloaded binary packages are in
+	C:\Users\User\AppData\Local\Temp\RtmpETkwI8\downloaded_packages"
+"1",""
+"1","
+"

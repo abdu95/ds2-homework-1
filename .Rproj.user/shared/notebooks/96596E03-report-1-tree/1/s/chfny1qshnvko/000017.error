@@ -1,1 +1,0 @@
-{"frames":[{"func":"rpart.plot(simple_tree)","file":"","line_number":0,"end_line_number":0,"character_number":0,"end_character_number":0},{"func":"stop(\"Not an rpart object\")","file":"","line_number":0,"end_line_number":0,"character_number":0,"end_character_number":0}],"message":"Error in rpart.plot(simple_tree) : Not an rpart object\n"}
