@@ -14,6 +14,7 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r, echo = FALSE, message=FALSE, warning=FALSE}
 
 library(tidyverse)
+library(skimr)
 library(ggplot2)
 library(GGally)
 library(randomForest)
@@ -54,6 +55,7 @@ data <- filter(data, between(age, 0, 95), hours_since_scheduled >= 0) %>%
 
 ```{r h20_start, echo = FALSE, message=FALSE, warning=FALSE, results='hide'}
 h2o.init()
+# h2o.shutdown()
 ```
 
 ```{r, echo = FALSE, message=FALSE, warning=FALSE, results='hide'}
@@ -70,57 +72,199 @@ data_valid <- splitted_data[[2]]
 data_test <- splitted_data[[3]]
 ```
 
+After some cleaning, dataset consists of 71934 observations and 9 variables. 6 variables are factor variables and 3 variables are numeric variables. 
+
+50% of the dataset was split into training set, 45% into validation and 5% into test sets.
+
 
 ### b. Train a benchmark model of your choice (such as random forest, gbm or glm) and evaluate it on the validation set.
 
+Random forest model was created as a benchmark and trained. 
 
-```{r, echo = FALSE, message=FALSE, warning=FALSE}
+```{r, echo = FALSE, message=FALSE, warning=FALSE, results='hide'}
 y <- "no_show"
 X <- setdiff(names(h2o_data), y)
 
-rf_params <- list(
-  ntrees = c(10, 50, 100, 300),
-  mtries = c(2, 3, 4),
-  sample_rate = c(0.2, 0.632, 1),
-  max_depth = c(10, 20)
-)
-
-rf_grid <- h2o.grid(
-  "randomForest", x = X, y = y,
+rf_model <- h2o.randomForest(
+  X, y,
   training_frame = data_train,
-  grid_id = "rf",
-  nfolds = 5, 
+  model_id = "rf_first",
+  ntrees = 200,
+  max_depth = 10,
   seed = my_seed,
-  hyper_params = rf_params
+  nfolds = 5)
+```
+
+
+
+
+When trained on the validation set, RMSE of the RF model was equal to 0.4456.
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+h2o.rmse(h2o.performance(rf_model, data_valid))
+
+```
+
+### c. Build at least 3 models of different families using cross validation, keeping cross validated predictions. You might also try deeplearning.
+
+Three models were built and trained: 
+
+- Random Forest (Ensemble Algorithms);
+
+- GLM (Regression Algorithms);
+
+- Deep Learning (Deep Learning Algorithms, Artificial Neural Network Algorithms)
+
+
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+glm_model <- h2o.glm(
+  X, y,
+  training_frame = data_train,
+  model_id = "lasso",
+  family = "binomial",
+  alpha = 1,
+  lambda_search = TRUE,
+  seed = my_seed,
+  nfolds = 5,
+  keep_cross_validation_predictions = TRUE  
+  
+)
+```
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+
+rf_model_2 <- h2o.randomForest(
+  X, y,
+  training_frame = data_train,
+  model_id = "rf",
+  ntrees = 200,
+  max_depth = 10,
+  seed = my_seed,
+  nfolds = 5,
+  keep_cross_validation_predictions = TRUE
 )
 
-h2o.getGrid(rf_grid@grid_id, "mae")
-best_rf <- h2o.getModel(
-  h2o.getGrid(rf_grid@grid_id, "mae")@model_ids[[1]]
-)
-h2o.mae(h2o.performance(best_rf))
-h2o.mae(h2o.performance(best_rf, data_valid))
+```
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
 
+deeplearning_model <- h2o.deeplearning(
+  X, y,
+  training_frame = data_train,
+  model_id = "deeplearning",
+  hidden = c(32, 8),
+  seed = my_seed,
+  nfolds = 5,
+  keep_cross_validation_predictions = TRUE
+)
+```
+
+
+
+### d. Evaluate validation set performance of each model.
+
+
+```{r function_get, echo = FALSE, message=FALSE, warning=FALSE}
+
+getPerformanceMetrics <- function(model, newdata = NULL, xval = FALSE) {
+  h2o.performance(model, newdata = newdata, xval = xval)@metrics$thresholds_and_metric_scores %>%
+    as_tibble() %>%
+    mutate(model = model@model_id)
+}
+```
+
+
+```{r three_models, echo = FALSE, message=FALSE, warning=FALSE}
+# tree_performance <- getPerformanceMetrics(simple_tree, xval = TRUE)
+
+glm_performance <- getPerformanceMetrics(glm_model, newdata = data_valid)
+rf_performance <- getPerformanceMetrics(rf_model_2, newdata = data_valid)
+dl_performance <- getPerformanceMetrics(deeplearning_model, newdata = data_valid)
+
+three_models <- list(glm_model, rf_model_2, deeplearning_model)
+
+# my_models <- list(glm_model, rf_model, gbm_model, deeplearning_model)
+# all_performance <- map_df(c(simple_models, my_models), getPerformanceMetrics, xval = TRUE)
+# plotROC(all_performance)
+# plotRP(all_performance)
+
+
+performances = data.frame(
+  "glm" = h2o.auc(h2o.performance(glm_model, newdata = data_valid)),
+  "rf" = h2o.auc(h2o.performance(rf_model_2, newdata = data_valid)),
+  "deeplearning" = h2o.auc(h2o.performance(deeplearning_model, newdata = data_valid))
+)
+performances
+```
+
+To evaluate the performance of the models, AUC metrics was used. We can see that AUC of GLM is the lowest (0.5836) and AUC of Random Forest is the highest (0.6007). Deep Learning model's AUC is in between (0.5905).
+
+
+```{r map, echo = FALSE, message=FALSE, warning=FALSE}
+
+# map_df(
+#   c(three_models, ensemble_model),
+#   ~{tibble(model = .@model_id, auc = h2o.auc(h2o.performance(., newdata = data_test)))}
+# )
 
 
 ```
 
 
-Random Forest has several tuning parameters. One good rule of thumb for the number of variables is to pick the square root of the total number of variables, which would be 3 so I tried 2, 3, and 4. 
-
-
-### c. Build at least 3 models of different families using cross validation, keeping cross validated predictions. You might also try deeplearning.
-
-
-### d. Evaluate validation set performance of each model.
-
 ### e. How large are the correlations of predicted scores of the validation set produced by the base learners?
+
+
+```{r corr, echo = FALSE, message=FALSE, warning=FALSE}
+h2o.model_correlation_heatmap(three_models, data_valid)
+
+# h2o.model_correlation_heatmap(automl, data_valid)
+# rbind(
+#   mae_on_validation,
+#   c("automl", h2o.mae(h2o.performance(automl@leader, data_valid)))
+# )
+```
+
+This heatmap allows us to see the correlation of predicted scores of the validation set produced by the base learners. 
+
+In general, we can see that all the predicted scores are highly correlated. Correlation between predicted score of deeplearning and lasso is higher than predicted score of deeplearning and RF. 
+
 
 ### f. Create a stacked ensemble model from the base learners.
 
+```{r stack, echo = FALSE, message=FALSE, warning=FALSE}
+
+ensemble_model <- h2o.stackedEnsemble(
+  X, y,
+  training_frame = data_train,
+  base_models = three_models,
+  seed = my_seed,
+  keep_levelone_frame = TRUE
+)
+# ensemble_model
+ensemble_model@model$metalearner_model@model$coefficients_table
+```
+
+Here we can see the coefficients generated by the stacked model for each learner. 
+
 ### g. Evaluate ensembles on validation set. Did it improve prediction?
 
+
+```{r stack_2, echo = FALSE, message=FALSE, warning=FALSE}
+h2o.auc(h2o.performance(ensemble_model, newdata = data_valid))
+```
+
+Stacked Ensemble model improved the prediction slightly, it's AUC is 0.6013, which is 0.01 higher by best model's (RF) score (0.6007). 
+
+
 ### h. Evaluate the best performing model on the test set. How does performance compare to that of the validation set?
+
+```{r final, echo = FALSE, message=FALSE, warning=FALSE}
+h2o.auc(h2o.performance(ensemble_model, newdata = data_test))
+```
+
+AUC in test set is 0.5916 which is very slightly lower than the AUC of the best model (Stacked Ensemble method) in the validation set. 
+
+Lower AUC in test set may indicate about potential underfit in live data. However, considering this difference is very low, we can be sure our best model - Stacked Ensemble model will perform well in live data as well. 
 
 
 
