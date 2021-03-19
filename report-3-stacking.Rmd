@@ -98,26 +98,28 @@ rf_model <- h2o.randomForest(
 
 
 
-When trained on the validation set, RMSE of the RF model was equal to 0.4456.
+When evaluated on the validation set, AUC of the RF model was equal to 0.6007.
 
 ```{r, echo = FALSE, message=FALSE, warning=FALSE}
-h2o.rmse(h2o.performance(rf_model, data_valid))
+h2o.auc(h2o.performance(rf_model, data_valid))
 
 ```
 
 ### c. Build at least 3 models of different families using cross validation, keeping cross validated predictions. You might also try deeplearning.
 
-Three models were built and trained: 
+These models were built and trained: 
 
 - Random Forest (Ensemble Algorithms);
 
 - GLM (Regression Algorithms);
 
+- GBM (Boosting);
+
 - Deep Learning (Deep Learning Algorithms, Artificial Neural Network Algorithms)
 
 
 
-```{r, echo = FALSE, message=FALSE, warning=FALSE}
+```{r, echo = FALSE, message=FALSE, warning=FALSE, results='hide'}
 glm_model <- h2o.glm(
   X, y,
   training_frame = data_train,
@@ -132,7 +134,7 @@ glm_model <- h2o.glm(
 )
 ```
 
-```{r, echo = FALSE, message=FALSE, warning=FALSE}
+```{r, echo = FALSE, message=FALSE, warning=FALSE, results='hide'}
 
 rf_model_2 <- h2o.randomForest(
   X, y,
@@ -146,7 +148,24 @@ rf_model_2 <- h2o.randomForest(
 )
 
 ```
-```{r, echo = FALSE, message=FALSE, warning=FALSE}
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+gbm_model <- h2o.gbm(
+  X, y,
+  training_frame = data_train,
+  model_id = "gbm",
+  ntrees = 200,
+  max_depth = 5,
+  learn_rate = 0.1,
+  seed = my_seed,
+  nfolds = 5,
+  keep_cross_validation_predictions = TRUE
+)
+```
+
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE, results='hide'}
 
 deeplearning_model <- h2o.deeplearning(
   X, y,
@@ -177,11 +196,14 @@ getPerformanceMetrics <- function(model, newdata = NULL, xval = FALSE) {
 ```{r three_models, echo = FALSE, message=FALSE, warning=FALSE}
 # tree_performance <- getPerformanceMetrics(simple_tree, xval = TRUE)
 
-glm_performance <- getPerformanceMetrics(glm_model, newdata = data_valid)
-rf_performance <- getPerformanceMetrics(rf_model_2, newdata = data_valid)
-dl_performance <- getPerformanceMetrics(deeplearning_model, newdata = data_valid)
+# glm_performance <- getPerformanceMetrics(glm_model, newdata = data_valid)
+# rf_performance <- getPerformanceMetrics(rf_model_2, newdata = data_valid)
+# dl_performance <- getPerformanceMetrics(deeplearning_model, newdata = data_valid)
 
-three_models <- list(glm_model, rf_model_2, deeplearning_model)
+four_models <- list(glm_model, rf_model_2, gbm_model, deeplearning_model)
+
+three_performances <- getPerformanceMetrics(glm_model, newdata = data_valid)
+
 
 # my_models <- list(glm_model, rf_model, gbm_model, deeplearning_model)
 # all_performance <- map_df(c(simple_models, my_models), getPerformanceMetrics, xval = TRUE)
@@ -192,30 +214,21 @@ three_models <- list(glm_model, rf_model_2, deeplearning_model)
 performances = data.frame(
   "glm" = h2o.auc(h2o.performance(glm_model, newdata = data_valid)),
   "rf" = h2o.auc(h2o.performance(rf_model_2, newdata = data_valid)),
+  "gbm" = h2o.auc(h2o.performance(gbm_model, newdata = data_valid)),
   "deeplearning" = h2o.auc(h2o.performance(deeplearning_model, newdata = data_valid))
 )
-performances
-```
 
-To evaluate the performance of the models, AUC metrics was used. We can see that AUC of GLM is the lowest (0.5836) and AUC of Random Forest is the highest (0.6007). Deep Learning model's AUC is in between (0.5905).
-
-
-```{r map, echo = FALSE, message=FALSE, warning=FALSE}
-
-# map_df(
-#   c(three_models, ensemble_model),
-#   ~{tibble(model = .@model_id, auc = h2o.auc(h2o.performance(., newdata = data_test)))}
-# )
-
+knitr::kable(performances, digits = c(4,4,4,4))
 
 ```
 
+To evaluate the performance of the models, AUC metrics was used. We can see that AUC of GLM is the lowest (0.5836) and AUC of GBM is the highest 0.6025. Random Forest (0.6007) and Deep Learning models' AUC (0.5948) comes after GBM.
 
 ### e. How large are the correlations of predicted scores of the validation set produced by the base learners?
 
 
 ```{r corr, echo = FALSE, message=FALSE, warning=FALSE}
-h2o.model_correlation_heatmap(three_models, data_valid)
+h2o.model_correlation_heatmap(four_models, data_valid)
 
 # h2o.model_correlation_heatmap(automl, data_valid)
 # rbind(
@@ -226,23 +239,41 @@ h2o.model_correlation_heatmap(three_models, data_valid)
 
 This heatmap allows us to see the correlation of predicted scores of the validation set produced by the base learners. 
 
-In general, we can see that all the predicted scores are highly correlated. Correlation between predicted score of deeplearning and lasso is higher than predicted score of deeplearning and RF. 
+In general, we can see that all the predicted scores are highly correlated.
 
+Highest correlation belongs to RF and GLM (lasso). 
+
+Correlation between predicted score of RF and deep learning is also high.
+
+Correlation between  GLM (lasso) and deep learning higher than the correlation between GLM (lasso) and GBM. Both deep learning - GBM and RF and GBM partners have low correlation. 
 
 ### f. Create a stacked ensemble model from the base learners.
 
-```{r stack, echo = FALSE, message=FALSE, warning=FALSE}
+```{r stack, echo = FALSE, message=FALSE, warning=FALSE, results='hide'}
 
 ensemble_model <- h2o.stackedEnsemble(
   X, y,
   training_frame = data_train,
-  base_models = three_models,
+  base_models = four_models,
   seed = my_seed,
   keep_levelone_frame = TRUE
 )
-# ensemble_model
-ensemble_model@model$metalearner_model@model$coefficients_table
+
 ```
+
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+
+# ensemble_model
+
+
+knitr::kable(
+  ensemble_model@model$metalearner_model@model$coefficients_table %>%
+    as.data.frame(), digits= c(4,4,4,4,4))
+
+```
+
+
 
 Here we can see the coefficients generated by the stacked model for each learner. 
 
@@ -253,7 +284,7 @@ Here we can see the coefficients generated by the stacked model for each learner
 h2o.auc(h2o.performance(ensemble_model, newdata = data_valid))
 ```
 
-Stacked Ensemble model improved the prediction slightly, it's AUC is 0.6013, which is 0.01 higher by best model's (RF) score (0.6007). 
+Stacked Ensemble model improved the prediction slightly, it's AUC is 0.6038, which is 0.03 higher by best model's (RF) score (0.6007). 
 
 
 ### h. Evaluate the best performing model on the test set. How does performance compare to that of the validation set?
@@ -262,7 +293,7 @@ Stacked Ensemble model improved the prediction slightly, it's AUC is 0.6013, whi
 h2o.auc(h2o.performance(ensemble_model, newdata = data_test))
 ```
 
-AUC in test set is 0.5916 which is very slightly lower than the AUC of the best model (Stacked Ensemble method) in the validation set. 
+AUC in test set is 0.5986 which is very slightly lower than the AUC of the best model (Stacked Ensemble method) in the validation set. 
 
 Lower AUC in test set may indicate about potential underfit in live data. However, considering this difference is very low, we can be sure our best model - Stacked Ensemble model will perform well in live data as well. 
 
