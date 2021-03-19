@@ -1,0 +1,127 @@
+---
+title: "Homework 1:  Stacking"
+subtitle: "Data Science 2: Machine Learning Tools - CEU 2021"
+author: "Abduvosid Malikov"
+output: html_document
+
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+
+library(tidyverse)
+library(ggplot2)
+library(GGally)
+library(randomForest)
+
+theme_set(theme_minimal())
+
+library(h2o)
+```
+
+
+This analysis aims to predict whether patients actually show up for their medical appointments.
+
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+
+data <- read_csv("KaggleV2-May-2016.csv")
+
+# some data cleaning
+data <- select(data, -one_of(c("PatientId", "AppointmentID", "Neighbourhood"))) %>%
+  janitor::clean_names()
+
+# for binary prediction, the target variable must be a factor + generate new variables
+data <- mutate(
+  data,
+  no_show = factor(no_show, levels = c("Yes", "No")),
+  handcap = ifelse(handcap > 0, 1, 0),
+  across(c(gender, scholarship, hipertension, alcoholism, handcap), factor),
+  hours_since_scheduled = as.numeric(appointment_day - scheduled_day)
+)
+
+# clean up a little bit
+data <- filter(data, between(age, 0, 95), hours_since_scheduled >= 0) %>%
+  select(-one_of(c("scheduled_day", "appointment_day", "sms_received")))
+```
+
+
+### a. Create train / validation / test sets, cutting the data into 5% - 45% - 50% parts.
+
+```{r h20_start, echo = FALSE, message=FALSE, warning=FALSE, results='hide'}
+h2o.init()
+```
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE, results='hide'}
+h2o_data <- as.h2o(data)
+my_seed <- 20210318
+
+```
+
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+splitted_data <- h2o.splitFrame(h2o_data, ratios = c(0.5, 0.45), seed = my_seed)
+data_train <- splitted_data[[1]]
+data_valid <- splitted_data[[2]]
+data_test <- splitted_data[[3]]
+```
+
+
+### b. Train a benchmark model of your choice (such as random forest, gbm or glm) and evaluate it on the validation set.
+
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+y <- "no_show"
+X <- setdiff(names(h2o_data), y)
+
+rf_params <- list(
+  ntrees = c(10, 50, 100, 300),
+  mtries = c(2, 3, 4),
+  sample_rate = c(0.2, 0.632, 1),
+  max_depth = c(10, 20)
+)
+
+rf_grid <- h2o.grid(
+  "randomForest", x = X, y = y,
+  training_frame = data_train,
+  grid_id = "rf",
+  nfolds = 5, 
+  seed = my_seed,
+  hyper_params = rf_params
+)
+
+h2o.getGrid(rf_grid@grid_id, "mae")
+best_rf <- h2o.getModel(
+  h2o.getGrid(rf_grid@grid_id, "mae")@model_ids[[1]]
+)
+h2o.mae(h2o.performance(best_rf))
+h2o.mae(h2o.performance(best_rf, data_valid))
+
+
+
+```
+
+
+Random Forest has several tuning parameters. One good rule of thumb for the number of variables is to pick the square root of the total number of variables, which would be 3 so I tried 2, 3, and 4. 
+
+
+### c. Build at least 3 models of different families using cross validation, keeping cross validated predictions. You might also try deeplearning.
+
+
+### d. Evaluate validation set performance of each model.
+
+### e. How large are the correlations of predicted scores of the validation set produced by the base learners?
+
+### f. Create a stacked ensemble model from the base learners.
+
+### g. Evaluate ensembles on validation set. Did it improve prediction?
+
+### h. Evaluate the best performing model on the test set. How does performance compare to that of the validation set?
+
+
+
+

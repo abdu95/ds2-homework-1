@@ -14,8 +14,9 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r, echo = FALSE, message=FALSE, warning=FALSE}
 # install.packages("data.tree")
 # install.packages("DiagrammeR")
-install.packages("gbm")
-install.packages("xgboost")
+# install.packages("gbm")
+# install.packages("xgboost")
+# install.packages("ROCR")
 library(tidyverse)
 library(ggplot2)
 library(caret)
@@ -33,22 +34,14 @@ library(data.tree)
 library(DiagrammeR)
 library(gbm)
 library(xgboost)
+library(pROC)
+library(ROCR)
+library(skimr)
 
-library(h2o)
+
 library(rpart)
 library(rpart.plot)
 ```
-
-```{r, echo = FALSE, message=FALSE, warning=FALSE,  results= FALSE}
-
-h2o.init()
-
-# stop 
-# h2o.shutdown()
-
-```
-
-
 
 ### EDA
 
@@ -56,115 +49,42 @@ h2o.init()
 ```{r data, echo=FALSE}
 
 data <- as_tibble(ISLR::OJ)
-
 ```
 
 In this problem we are going to work with the Orange Juice dataset from the ISLR package. This dataset contains 1070 purchases where the customer either purchased Citrus Hill (CH) or Minute Maid (MM) Orange Juice. There are 18 variables that presents customer and product characteristics. The goal is to predict which of the juices is chosen in a given purchase situation. 
 
-A description of the variables.
+#### A description of the variables.
 
 There are a number of characteristics of the customer and product that are recorded. There are 2 factor variables and 16 numeric variables. 
 
-Purchase
-A factor with levels CH and MM indicating whether the customer purchased Citrus Hill or Minute Maid Orange Juice
-
-Store7
-A factor with levels No and Yes indicating whether the sale is at Store 7
-
-
 
 ```{r, echo = FALSE, message=FALSE, warning=FALSE}
-
+# variables description
 # ?ISLR::OJ
 ```
 
 
-```{r, echo = FALSE, message=FALSE, warning=FALSE}
+```{r summary, echo = FALSE, message=FALSE, warning=FALSE, fig.cap= "Summary statistics"}
+# summary(data)
+# skimr::skim(data)
+# plot(data$Purchase,data$PriceCH)
+datasummary_skim(data)
 
-summary(data)
 ```
 
-Purchase:
-CH 653
-MM 417
-
-Price of CH varies from 1690 to 2090. Price of MM varies from 1690 to 2290. The higher maximum price of MM can be one of the reasons why there were less purchase of juice of this kind. 
+There were 653 purchases of CH juice and 417 purchases of MM juice. Price of CH varies from 1.7 to 2.1. Price of MM varies from 1.7 to 2.3 (Currency data not provided). The higher maximum price of MM can be one of the reasons why there were less purchase of juice of this kind. 
 
 However, maximum Discount offered for MM was higher than it is for CH juice (0.80 vs. 0.50). 
 
-
-```{r, echo = FALSE, message=FALSE, warning=FALSE}
-
-
-skimr::skim(data)
-```
-
-
-```{r, echo = FALSE, message=FALSE, warning=FALSE}
-
-plot(data$Purchase,data$PriceCH)
-
-```
-
-
 ### *a. Create a training data of 75% and keep 25% of the data as a test set. Train a decision tree as a benchmark model. Plot the final model and interpret the result (using rpart and rpart.plot is an easier option).*
 
+Data was splitted into training and test set. There are 495 CH juices and 307 MM juices in training set. 
 
-```{r, echo = FALSE, message=FALSE, warning=FALSE, results= FALSE}
+```{r train, echo = FALSE, message=FALSE, warning=FALSE}
 
-h2o_data <- as.h2o(data)
+smp_size <- floor(0.75 * nrow(data))
+
 my_seed <- 20210312
-# str(h2o_data)
-splitted_data <- h2o.splitFrame(h2o_data, ratios = c(0.75), seed = my_seed)
-data_train <- splitted_data[[1]]
-data_test <- splitted_data[[2]]
-```
-
-
-
-
-```{r, echo = FALSE, message=FALSE, warning=FALSE}
-y <- "Purchase"
-X <- setdiff(names(h2o_data), y)
-
-simple_tree <- h2o.randomForest(
-  X, y,
-  training_frame = data_train,
-  model_id = "tree",
-  ntrees = 1, mtries = length(X), sample_rate = 1, 
-  max_depth = 10,
-  nfolds = 5,
-  seed = my_seed
-)
-simple_tree
-
-# NaN
-h2o.performance(simple_tree)
-
-# xval stands for 'cross-validation'
-print(h2o.performance(simple_tree, xval = TRUE))
-
-# 0.47
-h2o.rmse(h2o.performance(simple_tree, xval = TRUE)) 
-
-
-# h2o.mae(h2o.performance(simple_tree, data_valid))
-```
-
-
-
-```{r, echo = FALSE, message=FALSE, warning=FALSE}
-# rpart.plot(simple_tree)
-# Error in rpart.plot(simple_tree) : Not an rpart object
-
-simple_tree
-```
-
-
-
-```{r, echo = FALSE, message=FALSE, warning=FALSE}
-
-smp_size <- floor(0.7 * nrow(data))
 set.seed(my_seed)
 
 train_ids <- sample(seq_len(nrow(data)), size = smp_size)
@@ -175,79 +95,91 @@ data_c$train[train_ids] <- 1
 data_train_c <- data_c %>% filter(train == 1)
 data_test_c <- data_c %>% filter(train == 0)
 
-model1 <- formula(Purchase ~ PriceDiff)
-
-
-# method = "rpart" => Error: The tuning parameter grid should have columns cp
-
-# cart1 <- train(
-#   model1, data = demo_data_train, method = "rpart",
-#   trControl = trainControl(method="none"),
-#   tuneGrid= data.frame(maxdepth=1))
-
-cart1 <- train(
-  model1, data = data_train_c, method = "rpart",
-  trControl = trainControl(method="cv"),
-  tuneGrid= expand.grid(cp = 0.01),
-  control = rpart.control(minsplit = 20, maxcompete = FALSE),
-  na.action = na.pass)
-
-# rpart.plot(cart1$finalModel)
-rpart.plot(cart1$finalModel, tweak=1, digits=1)
+# summary(data_train_c)
 
 ```
 
+I have trained a decision tree as a benchmark model. I used cross-validation. I set cp parameter (complexity parameter) to 0.01. This means a tree makes a further split only if this split improves the fit (performance) of the tree model by 0.01. 
 
-```{r}
-cart2 <- train(
-  model1, data = data_train_c, method = "rpart2",
-  trControl = trainControl(method="cv"),
-  tuneGrid= data.frame(maxdepth= c(2, 3, 4)))
-cart2
-```
+The variable upon to make a split was not hardcoded beforehand. I only indicated target variable (Purchase) and model itself figured out which predictor it is better to use for split. 
 
-```{r cars}
-# 468 CH
-# demo_data_train[demo_data_train$Purchase == 'CH',]
-# 522 obs where PriceDiff >= 0.015
-# demo_data_train[demo_data_train$PriceDiff >= 0.015,]
-# 365 customers chose 'CH' when PriceDiff >= 0.015 
-# 157 customers chose 'MM' when PriceDiff >= 0.015 
-# demo_data_train[demo_data_train$PriceDiff >= 0.015 & demo_data_train$Purchase == 'MM',]
+As we can see in the plot, tree has chosen LoyalCH variable first to make a split. The purpose of the split is to make members of the node as similar to each other as possible and to make them as different as possible from the members of the other node.  
 
-# Accuracy 0.67
-cart1$results
-```
-
-
-
-
-```{r, echo = FALSE, message=FALSE, warning=FALSE}
+```{r cart, echo = FALSE, message=FALSE, warning=FALSE}
 
 # do 5-fold CV
 train_control <- trainControl(method = "cv",
                               number = 5,
                               verboseIter = FALSE)
+
+cart1 <- train(
+  Purchase ~ ., data = data_train_c, method = "rpart",
+  trControl = train_control,
+  tuneGrid = expand.grid(cp = 0.01),
+  control = rpart.control(minsplit = 20, maxcompete = FALSE),
+  na.action = na.pass)
+
+rpart.plot(cart1$finalModel, tweak=1.6, digits=1)
+
+```
+
+
+``````{r summary_loyalch, echo = FALSE, message=FALSE, warning=FALSE}
+summary(data_train_c$LoyalCH)
+```
+
+The average LoyalCH (Customer brand loyalty for CH) in the training set is 0.56. In the CART model, the first split in the classification tree finds the LoyalCH value that divides observations (customers OR purchases) into two groups with the largest difference in average LoyalCH. The algorith finds the split at the LoyalCH of 0.4: is the LoyalCH is more or equal to 0.4 (yes or no). The left branch includes observations where LoyalCH is at least 0.4; the right branch below 0.4. 
+
+We can see that 65% observations had LoyalCH higher than (or equal to) 0.4 and 35% observations had a LoyalCH lower than 0.4. This freuquency is actually a predicted probability as well: when observation has a LoyalCH of more than (or equal to) 0.4, there is 65% chance that the Purchase will be CH, when observation has a LoyalCH lower than 0.4, there is 35% chance that the Purchase will be MM. 
+
+In the plot, there are actually far more further splits that shows the predicted probability for each type of juice (CH or MM) in percentages inside the node and the variable (and condition) that is used to make a split. 
+
+
+
+
+```{r cart_results, echo = FALSE, message=FALSE, warning=FALSE}
+# 495 CH
+# data_train_c[data_train_c$Purchase == 'CH',]
+
+# 580 obs where
+# data_train_c[data_train_c$LoyalCH >= 0.4,]
+
+# 450 customers chose 'CH' when 
+# 177 customers chose 'MM' when 
+# data_train_c[data_train_c$LoyalCH >= 0.4 & data_train_c$Purchase == 'CH',]
+# data_train_c[data_train_c$LoyalCH < 0.4 & data_train_c$Purchase == 'MM',]
+
+
+# Accuracy 0.8217081
+# cart1
+# Tuning parameter 'cp' was held constant at a value of 0.01
+
+cart1$results
+# cart1$results[1,"Accuracy"]
+
+```
+
+This is the performance of the CART model in the training set. We can see that it's Accuracy is pretty high: 0.8217081. 
+
+
+### *b. Investigate tree ensemble models: random forest, gradient boosting machine, XGBoost. Try various tuning parameter combinations and select the best model using cross-validation.*
+
+#### Random Forest
+
+First, I start to investigate Random Forest. 
+
+Random Forest has several tuning parameters. Let's start with number of variables. One good rule of thumb is to pick the square root of the total number of variables, which would be 4 (approx. square root of 18) so I tried 3, 4, and 5. For the split rule, I took the combination of gini and extratrees. I also took combination of 5 and 10 for the minimum node size. 
+
+
+```{r rf_tune, echo = FALSE, message=FALSE, warning=FALSE}
+set.seed(my_seed)
 # set tuning
 tune_grid <- expand.grid(
   .mtry = c(3, 4, 5),
-  .splitrule = "extratrees",
+  .splitrule = c("gini", "extratrees"),
   .min.node.size = c(5, 10)
 )
 predictors_1 <- colnames(data[,-1])
-
-set.seed(my_seed)
-
-
-# rf_model_1 <- train(
-#   formula(paste0("Purchase ~", paste0(predictors_1, collapse = " + "))),
-#   data = data_train_c,
-#   method = "ranger",
-#   trControl = train_control,
-#   ntree = c(10, 500),
-#   tuneGrid = tune_grid,
-#   importance = "impurity"
-# )
 
 rf_model_1 <- train(
   as.factor(Purchase) ~ ., 
@@ -258,32 +190,32 @@ rf_model_1 <- train(
   importance = "impurity"
 )
 
-# Accuracy 0.80 -> This score measures how many labels the model got right out of the total number of predictions.
-rf_model_1
+# rf_model_1
+
+rf_model_1$results[order(rf_model_1$results$Accuracy, decreasing = TRUE),][1,]
+# rf_model_1$results[order(rf_model_1$results$Accuracy, decreasing = TRUE),][1,"Accuracy"]
+
 
 ```
 
-
-```{r}
-# set.seed(my_seed)
-# rf_model_2 <- train(
-#    Purchase ~ ., 
-#    data = data_train_c, 
-#    method = "rf",
-#    metric = "RMSE",
-#    tuneGrid = expand.grid(mtry = 1:10), # searching around mtry=4
-#    trControl = train_control
-# )
-
-```
+Similarly to decision tree model used earlier, Accuracy was used to select the optimal model using the largest value. The accuracy of the Random Forest model is 0.814177. This score measures how many labels the model got right out of the total number of predictions. The final values used for the model were mtry = 3, splitrule = gini and min.node.size = 10
 
 
+#### Gradient Boosting Machine
 
+These are tuning parameters for the Gradient Boosting Machine: complexity of tree, number of trees, learning rate (how quickly the algorithm adapts), minimum samples. 
+I took combination of 1, 5, and 10 for the complexity of the tree. For the number of trees, I experimented starting from 200 to 500 (stepping by 50). I decided to play around 10 values from 0.01 to 0.3 for the learning rate (shrinkage). 1 and 5 were investigated for the the minimum number of training set samples in a node to commence splitting. 
 
-```{r}
+The final values used for the model were n.trees = 500, interaction.depth =
+ 1, shrinkage = 0.07444444 and n.minobsinnode = 5.
+ 
+The Accuracy for the GBM is 0.8278804.
+
+```{r gbm_tune, echo = FALSE, message=FALSE, warning=FALSE}
+
 gbm_grid <-  expand.grid(interaction.depth = c(1, 5, 10), # complexity of the tree
                          n.trees = (4:10)*50, # number of iterations, i.e. trees
-                         shrinkage = 0.1, # learning rate: how quickly the algorithm adapts
+                         shrinkage = seq(0.01,0.3,length=10), # learning rate: 
                          n.minobsinnode = c(1, 5) # the minimum number of training set samples in a node to commence splitting
 )
 
@@ -297,20 +229,27 @@ gbm_model <- train(as.factor(Purchase) ~ .,
                      verbose = FALSE,
                      tuneGrid = gbm_grid)
 
-# Accuracy 0.8211864
-gbm_model
+# gbm_model
+
+# order(gbm_model$results$Accuracy)
+gbm_model$results[order(gbm_model$results$Accuracy, decreasing = TRUE),][1,]
+
 ```
 
 
-```{r}
+#### XGBoost
 
+For the maximum number of iterations (trees), I chose 350. For the depth of the tree, I took combination of 2, 3, and 4. For learning rate, (the rate at which our model learns patterns in data) I experimented with 0.03, 0.05 and 0.06. For gamma (regularization - prevents overfitting), I chose 0.01. For the number of features (variables) supplied to a tree, I took combination of 10 values. The same was done for subsample, starting from 0.1 to 1 (stepping by 0.1).
+
+
+```{r xgb_tune, echo = FALSE, message=FALSE, warning=FALSE}
 xgb_grid <-  expand.grid(
         nrounds=c(350),
         max_depth = c(2,3, 4),
         eta = c(0.03,0.05, 0.06),
         gamma = c(0.01),
-        colsample_bytree = c(0.5),
-        subsample = c(0.75),
+        colsample_bytree = seq(0.1, 1, length = 10),
+        subsample = seq(0.1, 1, length = 10),
         min_child_weight = c(0))
 set.seed(my_seed)
 xgb_model <- train(
@@ -321,20 +260,56 @@ xgb_model <- train(
         trControl = train_control
     )
 
-# Accuracy 0.8251598 
-xgb_model
+# xgb_model
+# xgb_model$finalModel
+```
+
+
+The Accuracy of the XGBoost model is 0.8378804.
+
+The parameter values: eta: 0.03, max_depth = 2, gamma = 0.01, colsample_bytree = 0.5, min_child_weight = 0, subsample = 0.1, nrounds = 350
+
+
+```{r xgb_results, echo = FALSE, message=FALSE, warning=FALSE}
+
+# glm_model <- h2o.getModel(glm_grid@model_ids[[1]])
+# xgb_model$results[1,"Accuracy"]
+
+ # But later, I decided to stick to 0.1 in order to save the calculation time. min_child_weight was set to 0. [default=1]
+
+xgb_model$results[order(xgb_model$results$Accuracy, decreasing = TRUE),][1,]
 # as.factor(Purchase) ~ ., 
 ```
 
-```{r}
 
-xgb_model$finalModel
+
+```{r xgb_2, echo = FALSE, message=FALSE, warning=FALSE}
+xgb_grid <-  expand.grid(
+        nrounds=c(350),
+        max_depth = c(2),
+        eta = c(0.03),
+        gamma = c(0.01),
+        colsample_bytree = c(0.5),
+        subsample = c(0.1),
+        min_child_weight = c(0))
+set.seed(my_seed)
+xgb_model_2 <- train(
+        formula(paste0("Purchase ~", paste0(predictors_1, collapse = " + "))),
+        method = "xgbTree",
+        data = data_train_c,
+        tuneGrid = xgb_grid,
+        trControl = train_control
+    )
+xgb_model_2
+xgb_model_2$results[order(xgb_model_2$results$Accuracy, decreasing = TRUE),][1,]
 
 ```
 
 
 
-```{r}
+### *c. Compare the performance of the different models (if you use caret you should consider using the resamples function). Make sure to set the same seed before model training for all 3 models so that your cross validation samples are the same. Is any of these giving significantly different predictive power than the others?*
+
+```{r conclusion_results, echo = FALSE, message=FALSE, warning=FALSE}
 
 # evaluate random forests -------------------------------------------------
 
@@ -346,247 +321,19 @@ results <- resamples(
     model_4 = xgb_model
   )
 )
-summary(results)
+# summary(results)
 
-```
-
-
-
-```{r, echo = FALSE, message=FALSE, warning=FALSE}
-titanicHex = h2o_data
-response = "Purchase"
-predictors <- setdiff(names(h2o_data), response)
-
-
-titanic_1tree = 
-  h2o.gbm(x = predictors, y = response, 
-          training_frame = data_train, 
-          ntrees = 1, min_rows = 1, 
-          sample_rate = 1, col_sample_rate = 1,
-          max_depth = 3,
-          # use early stopping once the validation AUC doesn't improve 
-          # by at least 0.01% for 5 consecutive scoring events
-          stopping_rounds = 3, stopping_tolerance = 0.01, 
-          stopping_metric = "AUC", 
-          seed = 1)
-
-titanicH2oTree = h2o.getModelTree(model = titanic_1tree, tree_number = 1)
-titanicH2oTree
-```
-
-```{r, echo = FALSE, message=FALSE, warning=FALSE}
-
-createDataTree <- function(h2oTree) {
-  h2oTreeRoot = h2oTree@root_node
-  dataTree = Node$new(h2oTreeRoot@split_feature)
-  dataTree$type = 'split'
-  addChildren(dataTree, h2oTreeRoot)
-  return(dataTree)
-}
-
-addChildren <- function(dtree, node) {
-  
-  if(class(node)[1] != 'H2OSplitNode') return(TRUE)
-  
-  feature = node@split_feature
-  id = node@id
-  na_direction = node@na_direction
-  
-  if(is.na(node@threshold)) {
-    leftEdgeLabel = printValues(node@left_levels, 
-                                na_direction=='LEFT', 4)
-    rightEdgeLabel = printValues(node@right_levels, 
-                                 na_direction=='RIGHT', 4)
-  }else {
-    leftEdgeLabel = paste("<", node@threshold, 
-                          ifelse(na_direction=='LEFT',',NA',''))
-    rightEdgeLabel = paste(">=", node@threshold, 
-                           ifelse(na_direction=='RIGHT',',NA',''))
-  }
-  
-  left_node = node@left_child
-  right_node = node@right_child
-  
-  if(class(left_node)[[1]] == 'H2OLeafNode')
-    leftLabel = paste("prediction:", left_node@prediction)
-  else
-    leftLabel = left_node@split_feature
-  
-  if(class(right_node)[[1]] == 'H2OLeafNode')
-    rightLabel = paste("prediction:", right_node@prediction)
-  else
-    rightLabel = right_node@split_feature
-  
-  if(leftLabel == rightLabel) {
-    leftLabel = paste(leftLabel, "(L)")
-    rightLabel = paste(rightLabel, "(R)")
-  }
-  
-  dtreeLeft = dtree$AddChild(leftLabel)
-  dtreeLeft$edgeLabel = leftEdgeLabel
-  dtreeLeft$type = ifelse(class(left_node)[1] == 'H2OSplitNode', 'split', 'leaf')
-  
-  dtreeRight = dtree$AddChild(rightLabel)
-  dtreeRight$edgeLabel = rightEdgeLabel
-  dtreeRight$type = ifelse(class(right_node)[1] == 'H2OSplitNode', 'split', 'leaf')
-  
-  addChildren(dtreeLeft, left_node)
-  addChildren(dtreeRight, right_node)
-  
-  return(FALSE)
-}
-
-printValues <- function(values, is_na_direction, n=4) {
-  l = length(values)
-  if(l == 0)
-    value_string = ifelse(is_na_direction, "NA", "")
-  else
-    value_string = paste0(paste0(values[1:min(n,l)], collapse = ', '),
-                          ifelse(l > n, ",...", ""),
-                          ifelse(is_na_direction, ", NA", ""))
-  return(value_string)
-}
-```
-
-
-
-
-
-```{r, echo = FALSE, message=FALSE, warning=FALSE}
-
-titanicDataTree = createDataTree(titanicH2oTree)
-
-GetEdgeLabel <- function(node) {return (node$edgeLabel)}
-GetNodeShape <- function(node) {switch(node$type, 
-                                       split = "diamond", leaf = "oval")}
-GetFontName <- function(node) {switch(node$type, 
-                                      split = 'Palatino-bold', 
-                                      leaf = 'Palatino')}
-SetEdgeStyle(titanicDataTree, fontname = 'Palatino-italic', 
-             label = GetEdgeLabel, labelfloat = TRUE,
-             fontsize = "26", fontcolor='royalblue4')
-SetNodeStyle(titanicDataTree, fontname = GetFontName, shape = GetNodeShape, 
-             fontsize = "26", fontcolor='royalblue4',
-             height="0.75", width="1")
-
-SetGraphStyle(titanicDataTree, rankdir = "LR", dpi=70.)
-
-plot(titanicDataTree, output = "graph")
-```
-
-
-
-
-### *b. Investigate tree ensemble models: random forest, gradient boosting machine, XGBoost. Try various tuning parameter combinations and select the best model using cross-validation.*
-
-A good rule of thumb for the bootstrap samples (number of trees) is a few hundred. We experiment with small (10) and high (500) amount of trees. For the number of variables, one rule of thumb is to pick the square root of the total number of variables, which would be 4 (approx. square root of 18) so we tried 3, 4, and 5. 
-
-Tune the random forest
-```{r rf-tuning}
-# rf_params <- list(
-#   ntrees = c(10, 50, 100, 300),
-#   mtries = c(2, 4, 6, 8),
-#   sample_rate = c(0.2, 0.632, 1),
-#   max_depth = c(10, 20)
-# )
-
-?h2o.randomForest
-# caret - mtry. h2o - mtries
-
-# we have 6 different combinations: ntrees = 10, mtries 3, 4, 5; ntrees = 500, mtries 3, 4, 5; 
-
-rf_params <- list(ntrees = c(10, 500), mtries = c(3, 4, 5))
-
-
-rf_grid <- h2o.grid(
-  "randomForest", x = X, y = y,
-  training_frame = data_train,
-  grid_id = "rf",
-  nfolds = 5,  
-  seed = my_seed,
-  hyper_params = rf_params
+sum_results = data.frame(
+  "tree" = cart1$results[1,"Accuracy"],
+  "random_forest" = rf_model_1$results[order(rf_model_1$results$Accuracy, decreasing = TRUE),][1,"Accuracy"],
+  "gbm" = gbm_model$results[order(gbm_model$results$Accuracy, decreasing = TRUE),][1,"Accuracy"],
+  "xgboost" = xgb_model$results[order(xgb_model$results$Accuracy, decreasing = TRUE),][1,"Accuracy"]
 )
 
-# this shows log loss
-# rf_grid
-
-# rmse = 0.36
-# we can see that it was better to choose 3 variables to consider for each split when growing the decorrelated trees. 
-h2o.getGrid(rf_grid@grid_id, "rmse")
-
+sum_results             
 ```
 
-
-```{r, echo = FALSE, message=FALSE, warning=FALSE}
-
-best_rf <- h2o.getModel(
-  h2o.getGrid(rf_grid@grid_id, "rmse")@model_ids[[1]]
-)
-# 0.3608046
-h2o.rmse(h2o.performance(best_rf))
-# 0.3898565
-h2o.rmse(h2o.performance(best_rf, data_test))
-```
-
-gbm tuning
-
-```{r}
-gbm_params <- list(
-  learn_rate = c(0.01, 0.05, 0.1, 0.3),  
-  ntrees = c(10, 50, 100, 300),
-  max_depth = c(2, 5),
-  sample_rate = c(0.2, 0.5, 0.8, 1)
-)
-
-gbm_grid <- h2o.grid(
-  "gbm", x = X, y = y,
-  grid_id = "gbm",
-  training_frame = data_train,
-  nfolds = 5,
-  seed = my_seed,
-  hyper_params = gbm_params
-)
-```
-
-```{r gbm-tuning}
-gbm_performance_summary <- h2o.getGrid(gbm_grid@grid_id, "rmse")@summary_table %>%
-  as_tibble() %>%
-  mutate(across(c("rmse", names(gbm_params)), as.numeric))
-ggplot(gbm_performance_summary, aes(ntrees, rmse, color = factor(learn_rate))) +
-  geom_line() +
-  facet_grid(max_depth ~ sample_rate, labeller = label_both) +
-  theme(legend.position = "bottom") +
-  labs(color = "learning rate")
-```
-
-
-
-```{r xgboost-tuning}
-xgboost_params <- list(
-  learn_rate = c(0.1, 0.3),  # same as "eta", default: 0.3
-  ntrees = c(50, 100),
-  max_depth = c(2, 5),
-  gamma = c(0, 1, 2),  # regularization parameter
-  sample_rate = c(0.5, 1)
-)
-
-xgboost_grid <- h2o.grid(
-  "xgboost", x = X, y = y,
-  grid_id = "xgboost",
-  training_frame = data_train,
-  nfolds = 5,
-  seed = my_seed,
-  hyper_params = xgboost_params
-)
-best_xgboost <- h2o.getModel(
-  h2o.getGrid(xgboost_grid@grid_id, "mae")@model_ids[[1]]
-)
-h2o.mae(h2o.performance(best_xgboost))
-h2o.mae(h2o.performance(best_xgboost, data_valid))
-```
-
-
-
+Random Forest's performance is worse than simple decision tree. The reason for this can be not experimenting enough with the hyperparameter's of RF. GBM performs slightly better than decision tree. XGBoost's performance is much higher than perfromance of decision tree. 
 
 *c. Compare the performance of the different models (if you use caret you should consider using the resamples function). Make sure to set the same seed before model training for all 3 models so that your cross validation samples are the same. Is any of these giving significantly different predictive power than the others?*
 
@@ -595,4 +342,86 @@ h2o.mae(h2o.performance(best_xgboost, data_valid))
 # results <- resamples(final_models) %>% summary()
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+
+### *d. Choose the best model and plot ROC curve for the best model on the test set. Calculate and interpret AUC.*
+
+I chose XGBoost model and made ROC curve using it. 
+
+Confusion matrix:
+
+```{r confusion, echo = FALSE, message=FALSE, warning=FALSE}
+
+xgbFit2_pred <- predict(xgb_model, data_test_c)
+cm <- confusionMatrix(xgbFit2_pred,data_test_c$Purchase) 
+```
+
+Area under curve: 0.91
+The model might be overfitting.
+
+```{r roc_curve, echo = FALSE, message=FALSE, warning=FALSE}
+
+
+xgbFit2_probs <- predict(xgb_model, data_test_c, type="prob")
+#head(xgb.probs)
+ 
+xgbFit2_ROC <- roc(predictor=xgbFit2_probs$CH,
+               response=data_test_c$Purchase,
+               levels=rev(levels(data_test_c$Purchase)))
+xgbFit2_ROC$auc
+plot(xgbFit2_ROC,main="xgboost ROC")
+```
+
+
+The ROC curve shows the trade-off between sensitivity (or TPR) and specificity (1 – FPR). As a baseline, a random classifier is expected to give points lying along the diagonal (FPR = TPR). 
+
+We can see that our model have curves closer to the top-left corner and above the diagonal (random) which indicates good performance. 
+
+### *e. Inspect variable importance plots for the 3 models. Are similar variables found to be the most important for the 3 models?*
+
+
+Variable importance is determined by calculating the relative influence of each variable: whether that variable was selected to split on during the tree building process, and how much the squared error (over all trees) improved (decreased) as a result.
+
+
+#### Random Forest
+
+We can see that for all 3 models highest squred error improvement was contributed by LoyalCH variable. 
+
+However, consequent variables showed different contribution. For random forest, second most important variable is WeekofPurchase variable and its importance assessed as less than 20. 
+
+```{r var_rf, echo = FALSE, message=FALSE, warning=FALSE}
+caret_imp <- varImp(rf_model_1)
+plot(caret_imp)
+```
+
+
+#### GBM
+
+After LoyalCH variable, second most important variable in GBM is PriceDiff. Its importance is slightly higher than the third most important variable -  WeekofPurchase. 
+
+
+```{r var_gbm, echo = FALSE, message=FALSE, warning=FALSE}
+caret_imp <- varImp(gbm_model)
+plot(caret_imp)
+```
+
+
+#### XGboost
+
+In XGBoost model, WeekofPurchase is the second most important variable after LoyalCH and it is importance is assessed as near to 30. The top importance variable list is then followed by ListPriceDiff and PriceDiff. 
+
+
+```{r var_xgb, echo = FALSE, message=FALSE, warning=FALSE}
+
+caret_imp <- varImp(xgb_model)
+plot(caret_imp)
+
+
+```
+
+
+
+
+
+
+

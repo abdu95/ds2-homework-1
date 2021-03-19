@@ -1,0 +1,245 @@
+---
+title: "Homework 1:  Variable importance"
+subtitle: "Data Science 2: Machine Learning Tools - CEU 2021"
+author: "Abduvosid Malikov"
+output: html_document
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+
+library(tidyverse)
+library(ggplot2)
+library(GGally)
+library(randomForest)
+
+
+theme_set(theme_minimal())
+
+library(h2o)
+```
+
+
+The aim of this analysis is to use the Hitters dataset and predict log_salary.
+
+
+```{r h20_start, echo = FALSE, message=FALSE, warning=FALSE, results='hide'}
+h2o.init()
+# h2o.no_progress()
+```
+
+
+### *a. Train two random forest models: one with sampling 2 variables randomly for each split and one with 10 (use the whole dataset and don’t do cross-validation). Inspect variable importance profiles. What do you see in terms of how important the first few variables are relative to each other?*
+
+
+```{r data_init, echo = FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+data <- as_tibble(ISLR::Hitters) %>%
+  drop_na(Salary) %>%
+  mutate(log_salary = log(Salary), Salary = NULL)
+
+h2o_data <- as.h2o(data)
+my_seed <- 20210319
+```
+
+Two random forest models were trained: with 2 and 10 mtries respectively. 
+
+```{r rf_1, echo = FALSE, message=FALSE, warning=FALSE, results='hide'}
+y <- "log_salary"
+X <- setdiff(names(h2o_data), y)
+
+rf_with_2 <- h2o.randomForest(
+  X, y,
+  training_frame = h2o_data,
+  model_id = "rf_w_2",
+  mtries = 2,
+  seed = my_seed)
+
+rf_with_10 <- h2o.randomForest(
+  X, y,
+  training_frame = h2o_data,
+  model_id = "rf_w_10",
+  mtries = 10,
+  seed = my_seed)
+
+
+```
+
+Variable importance plot for the random forest with sampling 2 variables randomly for each split.
+
+
+```{r rf_imp, echo = FALSE, message=FALSE, warning=FALSE, results='hide'}
+h2o.varimp_plot(rf_with_2)
+```
+
+
+Variable importance plot for the random forest with sampling 10 variables randomly for each split.
+
+
+```{r rf_imp_2, echo = FALSE, message=FALSE, warning=FALSE}
+h2o.varimp_plot(rf_with_10)
+```
+
+
+
+In the first plot (sampling 2 variables) we can see that top important variables are in this order: CRuns, CWalks, CAtBat, CHits and so on. 
+
+In the second plot (sampling 10 variables), we can see that top important variables are in this order: CAtBat, CHits, CRuns, CRBI,  and so on. 
+
+
+The variables listed above are highly correlated with each other. The correlation plot below is the proof for this statement.
+
+```{r corr, echo=FALSE, message=FALSE, warning=FALSE }
+ggcorr(data,  hjust = 0.85, size = 3, color = "grey50")
+```
+
+
+The reason for the high-correlation between these variables can be understood by further inspecting the variables. For example, here are the description of the variables:
+
+CRuns: Number of runs during his career
+
+CWalks: Number of walks during his career
+
+CAtBat: Number of times at bat during his career
+
+CHits: Number of hits during his career
+
+CRBI: Number of runs batted in during his career
+
+It is obvious that if the player has high "Number of runs during his career" it is highly likely that he will have high "Number of walks during his career" as well. And the same applies to the other variables as well.
+
+
+### *b. One of them is more extreme in terms of how the most important and the next ones relate to each other. Give an intuitive explanation how mtry/mtries relates to relative importance of variables in random forest models.*
+
+I will explain this based on the book of "The Elements of Statistical Learning" and the post by jbowman:
+
+
+The logic of Random Forest algorithm is:
+
+At each terminal node that is larger than minimal size,
+
+1) Select mtry variables at random from the p regressor variables,
+
+2) From these mtry variables, pick the best variable and split point,
+
+3) Split the node into two daughter nodes using the chosen variable and split point.
+
+At each node splitting step, the variables are selected randomly. And this is the main idea behind random forest. A quote from The Elements of Statistical Learning, p 588: 
+
+
+*The idea in random forests ... is to improve the variance reduction of bagging by reducing the correlation between the trees, without increasing the variance too much. This is achieved in the tree-growing process through random selection of the input variables. *
+
+More clearly: reduce variance = reduce correlation between the trees.
+
+This is again the equilibrium game between bias and variance: due to its behavior, there is no incremental increase in bias in random forest. 
+
+The unbalanced use of predictor variables just reflects the fact that some are less important than others, where important is used in a heuristic rather than a formal sense, and as a consequence, for some trees, may not be used often or at all. For example, think about what would happen if you had a variable that was barely significant on the full data set, but you then generated a lot of bootstrap datasets from the full data set and ran the regression again on each bootstrap dataset. You can imagine that the variable would be insignificant on a lot of those bootstrap datasets. Now compare to a variable that was extremely highly significant on the full dataset; it would likely be significant on almost all of the bootstrap datasets too. So if you counted up the fraction of regressions for which each variable was "selected" by being significant, you'd get an unbalanced count across variables. This is somewhat (but only somewhat) analogous to what happens inside the random forest, only the variable selection is based on "best at each split" rather than "p-value < 0.05" or some such.
+
+However, that variable importance measures are not based solely on counts of how many times a variable is used in a split. Consequently, you can have "important" variables (as measured by "importance") that are used less often in splits than less "important" variables (as measured by "importance".) For example:
+
+x variable has higher importance, but z variable is used more frequently in splits; x's importance is high but in some sense very local, while z is more important over the full range of z values.
+
+Conclusion: by restricting the number of variables randomly sampled as candidates at each split, we are causing to use more important variables used less in split and viceversa: to use less important variables used more in splits. 
+
+
+
+### *c. In the same vein, estimate two gbm models with varying rate of sampling for each tree (use 0.1 and 1 for the parameter bag.fraction/sample_rate). Hold all the other parameters fixed: grow 500 trees with maximum depths of 5, applying a learning rate of 0.1. Compare variable importance plots for the two models. Could you explain why is one variable importance profile more extreme than the other?*
+
+
+
+```{r gbm, echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+gbm_with_0 <- h2o.gbm(
+  x = X, y = y,
+  model_id = "gbm_w_0",
+  training_frame = h2o_data,
+  sample_rate = 0.1,
+  ntrees = 500,
+  max_depth = 5,
+  learn_rate = 0.1,
+  seed = my_seed
+)
+
+gbm_with_1 <- h2o.gbm(
+  x = X, y = y,
+  model_id = "gbm_w_0",
+  training_frame = h2o_data,
+  sample_rate = 1,
+  ntrees = 500,
+  max_depth = 5,
+  learn_rate = 0.1,
+  seed = my_seed
+)
+
+```
+Variable importance plot for GBM with rate of sampling = 0.1
+
+
+```{r gbm_imp, echo = FALSE, message=FALSE, warning=FALSE}
+h2o.varimp_plot(gbm_with_0)
+```
+
+
+Variable importance plot for GBM with rate of sampling = 1
+
+
+```{r gbm_imp_2, echo = FALSE, message=FALSE, warning=FALSE}
+h2o.varimp_plot(gbm_with_1)
+```
+
+
+The variable we have seen earlier in Random Forest plots has shown high importance in GBM model as well. However there is a difference. 
+
+In both plots, CatBat variable has the highest importance. But CHits has extremely lower importance (<0.4) in plot2 compared to plot1 (> 0.6). 
+
+Could you explain why is one variable importance profile more extreme than the other?
+
+I gathered my answer to this question by analyzing several concepts. Lets look at these concepts first: 
+
+**h2O:**
+
+*sample_rate*: Specify the **row** sampling rate (x-axis, sample without replacement.) The range is 0.0 to 1.0. Higher values may improve training accuracy.
+
+**caret:**
+
+*bag.fraction* (Subsampling fraction) - the fraction of the training set observations randomly selected to propose the next tree in the expansion. In this case, it adopts stochastic gradient boosting strategy. By default, it is 0.5. That is half of the training sample at each iteration. Friedman showed that a subsampling trick can greatly improve predictive performance. 
+
+Gradient boosting is a greedy algorithm and can overfit a training dataset quickly. By giving higher value to sample_rate (1), we improve training accuracy and increase the chance of model to overfit a dataset. 
+
+
+**Stochastic Gradient Boosting**
+
+Stochastic gradient boosting is the variation of boosting which  allows trees to be greedily created from subsamples of the training dataset.
+
+This same benefit can be used to reduce the correlation between the trees in the sequence in gradient boosting models.
+
+- at each iteration a subsample of the training data is drawn at random (without replacement) from the full training dataset. The randomly selected subsample is then used, instead of the full sample, to fit the base learner. (Stochastic Gradient Boosting [PDF], 1999)
+
+#### Conclusion: 
+
+At each iteration, by drawing a smaller (0.1) subsample of the training data from the full training dataset, tree decides that CHits variable has high importance (more than 0.6, showin in first plot). At each iteration by drawing a bigger (1) subsample of the training data from the full training dataset, tree starts to realize that actually CHits variable has low importance (less than 0.4, showin in second plot). 
+
+
+### Appendix
+
+- Post by jbowman:
+
+https://stats.stackexchange.com/questions/44267/mtry-and-unbalanced-use-of-predictor-variables-in-random-forest
+
+
+- The Elements of Statistical Learning;
+
+- “Stochastic Gradient Boosting” (Friedman, 1999); 
+
+- h2o GBM documentation: 
+
+http://docs.h2o.ai/h2o/latest-stable/h2o-docs/data-science/gbm.html
+
+- Article about GBM
+
+https://machinelearningmastery.com/gentle-introduction-gradient-boosting-algorithm-machine-learning/?fbclid=IwAR2INPHs7IxaQlxk7iV4Q_Oj5N3U0qCbUeu1OdFdOpyVfsNgxQ0bL9yYdKg
+
